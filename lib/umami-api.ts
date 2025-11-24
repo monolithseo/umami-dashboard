@@ -464,100 +464,113 @@ export class UmamiAPI {
         const websites = await this.getAllWebsites() // 使用新的分页获取方法
         const results = []
 
-        for (const website of websites) {
-            // Use the correct ID field
-            const websiteId = website.id || website.websiteId
+        // Process websites in batches to avoid overwhelming the server
+        const BATCH_SIZE = 20
+        for (let i = 0; i < websites.length; i += BATCH_SIZE) {
+            const batch = websites.slice(i, i + BATCH_SIZE)
+            console.log(`Processing batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(websites.length / BATCH_SIZE)}...`)
 
-            if (!websiteId) {
-                console.error("Website missing ID:", website)
-                continue
-            }
+            const batchPromises = batch.map(async (website) => {
+                // Use the correct ID field
+                const websiteId = website.id || website.websiteId
 
-            try {
-                const [stats, activeUsers] = await Promise.all([
-                    this.getWebsiteStats(websiteId, timeRange),
-                    this.getActiveUsers(websiteId),
-                ])
+                if (!websiteId) {
+                    console.error("Website missing ID:", website)
+                    return null
+                }
 
-                if (stats) {
-                    // 使用统一的方法处理不同版本的数据结构
-                    // 兼容 Umami 2.x (数字), 3.0+ (字符串), 和其他版本 (对象)
-                    let pageviews = 0
-                    let visitors = 0
-                    let bounces = 0
-                    let totaltime = 0
-                    let sessions = 0
+                try {
+                    const [stats, activeUsers] = await Promise.all([
+                        this.getWebsiteStats(websiteId, timeRange),
+                        this.getActiveUsers(websiteId),
+                    ])
 
-                    // 解析页面浏览量
-                    pageviews = this.safeParseNumber(stats.pageviews)
+                    if (stats) {
+                        // 使用统一的方法处理不同版本的数据结构
+                        // 兼容 Umami 2.x (数字), 3.0+ (字符串), 和其他版本 (对象)
+                        let pageviews = 0
+                        let visitors = 0
+                        let bounces = 0
+                        let totaltime = 0
+                        let sessions = 0
 
-                    // 解析访客数 - 尝试多个字段名
-                    visitors = this.safeParseNumber(stats.uniques || stats.visitors)
+                        // 解析页面浏览量
+                        pageviews = this.safeParseNumber(stats.pageviews)
 
-                    // 解析跳出次数
-                    bounces = this.safeParseNumber(stats.bounces)
+                        // 解析访客数 - 尝试多个字段名
+                        visitors = this.safeParseNumber(stats.uniques || stats.visitors)
 
-                    // 解析总时长
-                    totaltime = this.safeParseNumber(stats.totaltime)
+                        // 解析跳出次数
+                        bounces = this.safeParseNumber(stats.bounces)
 
-                    // 解析会话数 - Umami 3.0 使用 'visits'，旧版本使用 'sessions'
-                    if (stats.visits) {
-                        sessions = this.safeParseNumber(stats.visits)
-                    } else if (stats.sessions) {
-                        // 处理数组类型的 sessions（某些版本）
-                        if (Array.isArray(stats.sessions)) {
-                            sessions = stats.sessions.length
+                        // 解析总时长
+                        totaltime = this.safeParseNumber(stats.totaltime)
+
+                        // 解析会话数 - Umami 3.0 使用 'visits'，旧版本使用 'sessions'
+                        if (stats.visits) {
+                            sessions = this.safeParseNumber(stats.visits)
+                        } else if (stats.sessions) {
+                            // 处理数组类型的 sessions（某些版本）
+                            if (Array.isArray(stats.sessions)) {
+                                sessions = stats.sessions.length
+                            } else {
+                                sessions = this.safeParseNumber(stats.sessions)
+                            }
                         } else {
-                            sessions = this.safeParseNumber(stats.sessions)
+                            // 后备方案: 从页面浏览量估算会话数
+                            sessions = Math.max(1, Math.floor(pageviews * 0.7))
+                        }
+
+                        // Calculate average session time (in seconds)
+                        // Umami's totaltime might be in milliseconds or seconds
+                        let avgSessionTime = 0
+                        if (sessions > 0 && totaltime > 0) {
+                            // If totaltime is very large, it's likely in milliseconds
+                            const timeInSeconds = totaltime > 1000000 ? totaltime / 1000 : totaltime
+                            avgSessionTime = Math.floor(timeInSeconds / sessions)
+                        }
+
+                        // Alternative calculation: use visitors if sessions data is unreliable
+                        if (avgSessionTime === 0 && visitors > 0 && totaltime > 0) {
+                            const timeInSeconds = totaltime > 1000000 ? totaltime / 1000 : totaltime
+                            avgSessionTime = Math.floor(timeInSeconds / visitors)
+                        }
+
+                        // Calculate bounce rate
+                        const bounceRate = pageviews > 0 && bounces >= 0
+                            ? (bounces / pageviews) * 100
+                            : 0
+
+                        return {
+                            id: websiteId,
+                            name: website.name,
+                            domain: website.domain,
+                            url: `https://${website.domain}`,
+                            pageviews,
+                            sessions,
+                            visitors,
+                            avgSessionTime,
+                            currentOnline: activeUsers,
+                            bounceRate,
                         }
                     } else {
-                        // 后备方案: 从页面浏览量估算会话数
-                        sessions = Math.max(1, Math.floor(pageviews * 0.7))
+                        console.warn(`No stats data for website ${website.name}`)
+                        return null
                     }
-
-                    // Calculate average session time (in seconds)
-                    // Umami's totaltime might be in milliseconds or seconds
-                    let avgSessionTime = 0
-                    if (sessions > 0 && totaltime > 0) {
-                        // If totaltime is very large, it's likely in milliseconds
-                        const timeInSeconds = totaltime > 1000000 ? totaltime / 1000 : totaltime
-                        avgSessionTime = Math.floor(timeInSeconds / sessions)
-                    }
-
-                    // Alternative calculation: use visitors if sessions data is unreliable
-                    if (avgSessionTime === 0 && visitors > 0 && totaltime > 0) {
-                        const timeInSeconds = totaltime > 1000000 ? totaltime / 1000 : totaltime
-                        avgSessionTime = Math.floor(timeInSeconds / visitors)
-                    }
-
-                    // Calculate bounce rate
-                    const bounceRate = pageviews > 0 && bounces >= 0
-                        ? (bounces / pageviews) * 100
-                        : 0
-
-                    // Only log if there are calculation issues
-                    if (avgSessionTime === 0 && totaltime > 0) {
-                        console.log(`${website.name}: Unable to calculate avg time - totaltime: ${totaltime}, sessions: ${sessions}, visitors: ${visitors}`)
-                    }
-
-                    results.push({
-                        id: websiteId,
-                        name: website.name,
-                        domain: website.domain,
-                        url: `https://${website.domain}`,
-                        pageviews,
-                        sessions,
-                        visitors,
-                        avgSessionTime,
-                        currentOnline: activeUsers,
-                        bounceRate,
-                    })
-                } else {
-                    console.warn(`No stats data for website ${website.name}`)
+                } catch (websiteError) {
+                    console.error(`Error processing website ${website.name}:`, websiteError)
+                    return null
                 }
-            } catch (websiteError) {
-                console.error(`Error processing website ${website.name}:`, websiteError)
-            }
+            })
+
+            const batchResults = await Promise.all(batchPromises)
+
+            // Filter out nulls and add to results
+            batchResults.forEach(result => {
+                if (result) {
+                    results.push(result)
+                }
+            })
         }
 
         return results
