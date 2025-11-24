@@ -33,23 +33,23 @@ interface WebsiteTableProps {
   formatTime: (seconds: number) => string
 }
 
-export function WebsiteTable({ 
-  websites, 
-  loading, 
-  getUmamiWebsiteUrl, 
-  formatNumber, 
-  formatTime 
+export function WebsiteTable({
+  websites,
+  loading,
+  getUmamiWebsiteUrl,
+  formatNumber,
+  formatTime
 }: WebsiteTableProps) {
   const { t } = useI18n()
-  
+
   // 搜索状态
   const [searchTerm, setSearchTerm] = useState('')
   const [localSearchTerm, setLocalSearchTerm] = useState('')
-  
+
   // 排序状态
   const [sortField, setSortField] = useState<SortField>('currentOnline')
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
-  
+
   // 分页状态 - 从localStorage加载页面大小
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(() => {
@@ -59,71 +59,71 @@ export function WebsiteTable({
     }
     return 20
   })
-  
+
   // 过滤和排序数据
   const filteredAndSortedWebsites = useMemo(() => {
     let filtered = websites
-    
+
     // 搜索过滤
     if (searchTerm.trim()) {
       const term = searchTerm.toLowerCase().trim()
-      filtered = websites.filter(website => 
+      filtered = websites.filter(website =>
         website.name.toLowerCase().includes(term) ||
         website.domain.toLowerCase().includes(term)
       )
     }
-    
+
     // 排序
     const sorted = [...filtered].sort((a, b) => {
       let aValue = a[sortField]
       let bValue = b[sortField]
-      
+
       // 处理字符串字段
       if (typeof aValue === 'string' && typeof bValue === 'string') {
         aValue = aValue.toLowerCase()
         bValue = bValue.toLowerCase()
       }
-      
+
       if (sortDirection === 'asc') {
         return aValue > bValue ? 1 : -1
       } else {
         return aValue < bValue ? 1 : -1
       }
     })
-    
+
     return sorted
   }, [websites, searchTerm, sortField, sortDirection])
-  
+
   // 分页数据
   const paginatedWebsites = useMemo(() => {
     const startIndex = (currentPage - 1) * pageSize
     const endIndex = startIndex + pageSize
     return filteredAndSortedWebsites.slice(startIndex, endIndex)
   }, [filteredAndSortedWebsites, currentPage, pageSize])
-  
+
   // 分页信息
   const totalPages = Math.ceil(filteredAndSortedWebsites.length / pageSize)
   const startItem = (currentPage - 1) * pageSize + 1
   const endItem = Math.min(currentPage * pageSize, filteredAndSortedWebsites.length)
-  
+
   // 处理搜索
   const handleSearch = () => {
     setSearchTerm(localSearchTerm)
     setCurrentPage(1) // 搜索后重置到第一页
   }
-  
+
   const handleSearchClear = () => {
     setLocalSearchTerm('')
     setSearchTerm('')
     setCurrentPage(1)
   }
-  
+
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
       handleSearch()
     }
   }
-  
+
   // 处理排序
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -134,7 +134,7 @@ export function WebsiteTable({
     }
     setCurrentPage(1) // 排序后重置到第一页
   }
-  
+
   const getSortIcon = (field: SortField) => {
     if (sortField !== field) {
       return <ChevronsUpDown className="h-4 w-4 opacity-50" />
@@ -143,23 +143,23 @@ export function WebsiteTable({
       <ChevronUp className="h-4 w-4" /> :
       <ChevronDown className="h-4 w-4" />
   }
-  
+
   // 处理分页
   const handlePageChange = (page: number) => {
     setCurrentPage(Math.max(1, Math.min(page, totalPages)))
   }
-  
+
   const handlePageSizeChange = (size: string) => {
     const newSize = parseInt(size)
     setPageSize(newSize)
     setCurrentPage(1) // 改变页面大小后重置到第一页
-    
+
     // 保存到localStorage
     if (typeof window !== 'undefined') {
       localStorage.setItem('website-table-page-size', size)
     }
   }
-  
+
   // 获取排序字段标签
   const getSortFieldLabel = (field: SortField) => {
     const labels: Record<SortField, string> = {
@@ -188,7 +188,7 @@ export function WebsiteTable({
           {t('sortedBy', {
             field: getSortFieldLabel(sortField),
             direction: t(sortDirection === 'asc' ? 'ascending' : 'descending')
-          })} • {t('totalWebsites', { count: filteredAndSortedWebsites.length })}
+          })} • {t('totalWebsites', { count: websites.length })}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -220,8 +220,8 @@ export function WebsiteTable({
                   </Button>
                 )}
               </div>
-              <Button 
-                onClick={handleSearch} 
+              <Button
+                onClick={handleSearch}
                 disabled={loading}
                 variant="outline"
                 className="w-full sm:w-auto"
@@ -292,8 +292,8 @@ export function WebsiteTable({
                   </Button>
                 )}
               </div>
-              <Button 
-                onClick={handleSearch} 
+              <Button
+                onClick={handleSearch}
                 disabled={loading}
                 variant="outline"
                 size="sm"
@@ -570,13 +570,13 @@ export function WebsiteTable({
             {/* 信息和页面大小控件 */}
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="text-xs sm:text-sm text-muted-foreground">
-                {t('showingItems', { 
-                  start: startItem, 
-                  end: endItem, 
-                  total: filteredAndSortedWebsites.length 
+                {t('showingItems', {
+                  start: startItem,
+                  end: endItem,
+                  total: filteredAndSortedWebsites.length
                 })}
               </div>
-              
+
               {/* 页面大小选择器 */}
               <div className="flex items-center gap-2">
                 <Label className="text-xs sm:text-sm whitespace-nowrap">{t('itemsPerPage')}</Label>
@@ -598,7 +598,7 @@ export function WebsiteTable({
                 <span className="text-xs sm:text-sm text-muted-foreground">{t('items')}</span>
               </div>
             </div>
-            
+
             {/* 分页按钮 - 只在有多页时显示 */}
             {totalPages > 1 && (
               <div className="flex items-center justify-center">
@@ -621,7 +621,7 @@ export function WebsiteTable({
                   >
                     <ChevronLeft className="h-3 w-3 sm:h-4 sm:w-4" />
                   </Button>
-                  
+
                   <div className="flex items-center gap-1">
                     {/* 显示页码按钮 */}
                     {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
@@ -635,7 +635,7 @@ export function WebsiteTable({
                       } else {
                         pageNumber = currentPage - 2 + i;
                       }
-                      
+
                       return (
                         <Button
                           key={pageNumber}
@@ -650,7 +650,7 @@ export function WebsiteTable({
                       );
                     })}
                   </div>
-                  
+
                   <Button
                     variant="outline"
                     size="sm"

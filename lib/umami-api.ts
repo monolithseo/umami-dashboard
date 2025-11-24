@@ -146,16 +146,26 @@ export class UmamiAPI {
         return response.json()
     }
 
-    async getWebsites(): Promise<UmamiWebsite[]> {
+    // 获取单页网站数据
+    async getWebsites(page: number = 1, pageSize: number = 100): Promise<{ data: UmamiWebsite[], count: number }> {
         try {
-            const data = await this.makeRequest("/api/websites")
-            // console.log("Websites API response:", data) // 关闭调试日志
-            const websites = data.data || data || []
-            // console.log("Parsed websites:", websites) // 关闭调试日志
-            return websites
+            const data = await this.makeRequest(`/api/websites?page=${page}&pageSize=${pageSize}`)
+
+            let websites: UmamiWebsite[] = []
+            let count = 0
+
+            if (data.data && Array.isArray(data.data)) {
+                websites = data.data
+                count = data.count || 0
+            } else if (Array.isArray(data)) {
+                websites = data
+                count = data.length
+            }
+
+            return { data: websites, count }
         } catch (error) {
-            console.error("Error fetching websites:", error)
-            return []
+            console.error(`Error fetching websites page ${page}:`, error)
+            return { data: [], count: 0 }
         }
     }
 
@@ -163,83 +173,45 @@ export class UmamiAPI {
     async getAllWebsites(): Promise<UmamiWebsite[]> {
         try {
             console.log("Start getting all websites...")
-
-            const allWebsites: UmamiWebsite[] = []
             const pageSize = 100
 
-            // 1. Fetch first page to get total count
-            console.log(`Fetching page 1 (pageSize: ${pageSize})...`)
-            const firstPageData = await this.makeRequest(`/api/websites?page=1&pageSize=${pageSize}`)
+            // 1. Fetch first page
+            const { data: firstPageWebsites, count: totalCount } = await this.getWebsites(1, pageSize)
 
-            let firstPageWebsites: UmamiWebsite[] = []
-            let totalCount = 0
-
-            if (firstPageData.data && Array.isArray(firstPageData.data)) {
-                firstPageWebsites = firstPageData.data
-                totalCount = firstPageData.count || 0
-            } else if (Array.isArray(firstPageData)) {
-                firstPageWebsites = firstPageData
-                // If API doesn't return count, we can't do parallel fetching easily without knowing total
-                // But usually array response means no pagination or all data
-            }
-
-            if (firstPageWebsites.length > 0) {
-                allWebsites.push(...firstPageWebsites)
-                console.log(`Got page 1: ${firstPageWebsites.length} websites`)
-            }
+            const allWebsites: UmamiWebsite[] = [...firstPageWebsites]
 
             // 2. Calculate remaining pages and fetch in parallel
             if (totalCount > pageSize) {
                 const totalPages = Math.ceil(totalCount / pageSize)
-                console.log(`Total websites: ${totalCount}, Total pages: ${totalPages}`)
+                // console.log(`Total websites: ${totalCount}, Total pages: ${totalPages}`)
 
                 const pagePromises = []
                 // Start from page 2
                 for (let page = 2; page <= totalPages; page++) {
                     // Limit to 50 pages for safety
                     if (page > 50) break
-
-                    pagePromises.push(
-                        this.makeRequest(`/api/websites?page=${page}&pageSize=${pageSize}`)
-                            .then(data => {
-                                if (data.data && Array.isArray(data.data)) {
-                                    return data.data
-                                }
-                                return []
-                            })
-                            .catch(err => {
-                                console.error(`Error fetching page ${page}:`, err)
-                                return []
-                            })
-                    )
+                    pagePromises.push(this.getWebsites(page, pageSize))
                 }
 
                 if (pagePromises.length > 0) {
-                    console.log(`Fetching ${pagePromises.length} remaining pages in parallel...`)
                     const results = await Promise.all(pagePromises)
-                    results.forEach(websites => {
-                        if (websites.length > 0) {
-                            allWebsites.push(...websites)
+                    results.forEach(result => {
+                        if (result.data && result.data.length > 0) {
+                            allWebsites.push(...result.data)
                         }
                     })
                 }
             } else if (firstPageWebsites.length === pageSize) {
-                // Fallback for APIs that don't return count but might have more pages (rare with Umami)
-                // Use sequential fetching as backup
+                // Fallback for APIs that don't return count
                 let page = 2
                 let hasMore = true
                 while (hasMore && page <= 50) {
-                    try {
-                        const data = await this.makeRequest(`/api/websites?page=${page}&pageSize=${pageSize}`)
-                        const sites = data.data || (Array.isArray(data) ? data : [])
-                        if (sites.length > 0) {
-                            allWebsites.push(...sites)
-                            page++
-                            if (sites.length < pageSize) hasMore = false
-                        } else {
-                            hasMore = false
-                        }
-                    } catch (e) {
+                    const { data } = await this.getWebsites(page, pageSize)
+                    if (data.length > 0) {
+                        allWebsites.push(...data)
+                        page++
+                        if (data.length < pageSize) hasMore = false
+                    } else {
                         hasMore = false
                     }
                 }
@@ -271,7 +243,7 @@ export class UmamiAPI {
             // Try to get both general stats and sessions data
             const [generalStats, sessionsData] = await Promise.all([
                 this.makeRequest(`/api/websites/${websiteId}/stats?${params}`).catch((e: any) => {
-                    console.log(`Stats API failed for ${websiteId}`)
+                    // console.log(`Stats API failed for ${websiteId}`)
                     return null
                 }),
                 this.makeRequest(`/api/websites/${websiteId}/sessions?${params}`).catch((e: any) => {
@@ -460,15 +432,28 @@ export class UmamiAPI {
         }
     }
 
-    async getAllWebsiteData(timeRange?: { startAt: number, endAt: number }) {
-        const websites = await this.getAllWebsites() // 使用新的分页获取方法
-        const results = []
+    async getAllWebsiteData(timeRange?: { startAt: number, endAt: number }, page?: number, pageSize?: number) {
+        let websites: UmamiWebsite[] = []
+        let totalCount = 0
+
+        if (page && pageSize) {
+            // Paged fetch
+            const result = await this.getWebsites(page, pageSize)
+            websites = result.data
+            totalCount = result.count
+        } else {
+            // Fetch all (legacy behavior)
+            websites = await this.getAllWebsites()
+            totalCount = websites.length
+        }
+
+        const results: any[] = []
 
         // Process websites in batches to avoid overwhelming the server
         const BATCH_SIZE = 20
         for (let i = 0; i < websites.length; i += BATCH_SIZE) {
             const batch = websites.slice(i, i + BATCH_SIZE)
-            console.log(`Processing batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(websites.length / BATCH_SIZE)}...`)
+            // console.log(`Processing batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(websites.length / BATCH_SIZE)}...`)
 
             const batchPromises = batch.map(async (website) => {
                 // Use the correct ID field
@@ -573,6 +558,6 @@ export class UmamiAPI {
             })
         }
 
-        return results
+        return { websites: results, total: totalCount }
     }
 }

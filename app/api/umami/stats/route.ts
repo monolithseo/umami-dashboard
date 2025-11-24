@@ -37,11 +37,18 @@ export async function GET(request: NextRequest) {
       console.log("Attempting to connect to Umami API...")
       const umamiApi = new UmamiAPI(config)
 
+      // Get pagination params
+      const searchParams = request.nextUrl.searchParams
+      const page = searchParams.get("page") ? parseInt(searchParams.get("page")!) : undefined
+      const pageSize = searchParams.get("pageSize") ? parseInt(searchParams.get("pageSize")!) : undefined
+
       try {
-        const websiteData = await umamiApi.getAllWebsiteData(timeRange)
+        const result = await umamiApi.getAllWebsiteData(timeRange, page, pageSize)
+        const websiteData = result.websites
+        const total = result.total
 
         if (websiteData.length > 0) {
-          // Calculate summary
+          // Calculate summary (based on fetched data)
           const summary = {
             totalPageviews: websiteData.reduce((sum, site) => sum + site.pageviews, 0),
             totalSessions: websiteData.reduce((sum, site) => sum + site.sessions, 0),
@@ -54,14 +61,23 @@ export async function GET(request: NextRequest) {
 
           return NextResponse.json({
             websites: websiteData,
+            total,
             summary,
             source: "umami"
           })
         } else {
           return NextResponse.json({
-            error: "未能获取到网站数据",
-            message: "可能是权限问题或网站配置问题，请检查配置信息"
-          }, { status: 404 })
+            websites: [],
+            total: 0,
+            summary: {
+              totalPageviews: 0,
+              totalSessions: 0,
+              totalVisitors: 0,
+              avgSessionTime: 0,
+              totalCurrentOnline: 0
+            },
+            source: "umami"
+          })
         }
       } catch (apiError) {
         console.error("Umami API error:", apiError)

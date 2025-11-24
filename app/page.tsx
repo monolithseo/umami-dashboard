@@ -84,9 +84,22 @@ export default function UmamiDashboard() {
     totalCurrentOnline: [] as Array<{ x: number, y: number }>
   })
   const [showConfigOnStart, setShowConfigOnStart] = useState(false)
+  const [syncProgress, setSyncProgress] = useState<{ current: number, total: number, isComplete: boolean } | null>(null)
   const [autoRefreshTimeoutId, setAutoRefreshTimeoutId] = useState<NodeJS.Timeout | null>(null)
   const loginConfigRef = useRef<LoginConfigDialogRef | null>(null)
   const { toast } = useToast()
+
+  // Helper to merge new website data into existing list
+  const mergeWebsites = (current: WebsiteStats[], newBatch: WebsiteStats[]): WebsiteStats[] => {
+    const currentMap = new Map(current.map(site => [site.id, site]))
+
+    // Update existing or add new
+    newBatch.forEach(site => {
+      currentMap.set(site.id, site)
+    })
+
+    return Array.from(currentMap.values())
+  }
 
   // 检查配置是否完整
   const isConfigComplete = (config: LoginConfig | null): boolean => {
@@ -112,8 +125,10 @@ export default function UmamiDashboard() {
     }
   }
 
+  const fetchSessionRef = useRef<number>(0)
+
   const fetchData = async (showToast: boolean = true, resetAutoRefresh: boolean = true) => {
-    // 检查配置是否完整
+    // Check config
     if (!isConfigComplete(config)) {
       console.log('Configuration incomplete, skipping data fetch')
       setStatusMessage(t('pleaseCompleteConfiguration'))
@@ -131,7 +146,12 @@ export default function UmamiDashboard() {
       return
     }
 
-    // Only show toast notification, don't set loading state immediately
+    // Increment session ID to cancel previous fetches
+    const currentSessionId = Date.now()
+    fetchSessionRef.current = currentSessionId
+
+    const isAutoRefresh = !showToast && !resetAutoRefresh
+
     if (showToast) {
       toast({
         title: t('fetchingLatestData'),
@@ -139,45 +159,61 @@ export default function UmamiDashboard() {
       })
     }
 
-    // Set loading state only after a short delay
+    // Set loading state only for manual refresh
     const loadingTimeout = setTimeout(() => {
-      setLoading(true)
+      if (fetchSessionRef.current === currentSessionId && !isAutoRefresh) {
+        setLoading(true)
+      }
     }, 500)
 
     try {
       const headers: HeadersInit = {}
-
-      // Add config to headers if available
       if (config) {
         headers["x-umami-config"] = encodeURIComponent(JSON.stringify(config))
       }
-
-      // Add time range to headers
       const timeRangeTimestamps = getTimeRangeTimestamps(timeRange)
       headers["x-time-range"] = encodeURIComponent(JSON.stringify(timeRangeTimestamps))
 
-      const response = await fetch("/api/umami/stats", { headers })
+      // 1. Fetch first page (50 items) - balance between speed and size
+      const pageSize = 50
+      const response = await fetch(`/api/umami/stats?page=1&pageSize=${pageSize}`, { headers })
       const data = await response.json()
 
-      // Clear the loading timeout since we got a response
       clearTimeout(loadingTimeout)
 
-      if (response.ok && data.websites && data.summary) {
-        // Apply current sorting
-        const sortedWebsites = sortWebsites(data.websites, sortField, sortDirection)
+      // Check if session is still valid
+      if (fetchSessionRef.current !== currentSessionId) return
 
-        setWebsites(sortedWebsites)
-        setSummary(data.summary)
+      if (response.ok && data.websites && data.summary) {
+        // Initial data load
+        const totalCount = data.total || 0
+
+        setSyncProgress({ current: Math.min(pageSize, totalCount), total: totalCount, isComplete: false })
+
+        let allWebsites: WebsiteStats[] = []
+
+        if (isAutoRefresh) {
+          // Smart Merge: Update existing list with first page
+          setWebsites(prev => {
+            const merged = mergeWebsites(prev, data.websites)
+            allWebsites = merged // Keep reference for summary calculation
+            return sortWebsites(merged, sortField, sortDirection)
+          })
+        } else {
+          // Manual Refresh: Replace list
+          allWebsites = data.websites
+          setWebsites(sortWebsites(allWebsites, sortField, sortDirection))
+        }
+
+        let currentSummary = data.summary
+        setSummary(currentSummary)
         setDataSource(data.source)
         setStatusMessage("")
-        setLastUpdated(new Date())
-        setLoading(false)
+        if (!isAutoRefresh) setLoading(false)
         setInitialLoad(false)
 
-        // 保存数据到历史记录
-        SessionHistory.addDataPoint(data.summary)
-
-        // 更新历史图表数据
+        // Save history
+        SessionHistory.addDataPoint(currentSummary)
         setHistoryData({
           totalPageviews: SessionHistory.getChartData('totalPageviews'),
           totalSessions: SessionHistory.getChartData('totalSessions'),
@@ -189,20 +225,79 @@ export default function UmamiDashboard() {
         if (showToast) {
           toast({
             title: t('dataUpdatedSuccessfully'),
-            description: t('dataFetchSuccess', { count: data.websites.length }),
+            description: t('dataFetchSuccess', { count: totalCount }),
           })
         }
 
-        // 重置自动刷新计时器（只有在手动刷新时）
+        // 2. Background fetch for remaining pages SEQUENTIALLY - UPDATE UI AFTER EACH
+        if (totalCount > pageSize) {
+          const totalPages = Math.ceil(totalCount / pageSize)
+          const allSummaries = [data.summary]
+
+          // Fetch remaining pages one at a time, updating UI after each
+          for (let page = 2; page <= totalPages; page++) {
+            // Check session validity before each request
+            if (fetchSessionRef.current !== currentSessionId) break
+
+            try {
+              const pageResponse = await fetch(`/api/umami/stats?page=${page}&pageSize=${pageSize}`, { headers })
+              const pageData = await pageResponse.json()
+
+              if (fetchSessionRef.current !== currentSessionId) break
+
+              if (pageResponse.ok && pageData.websites && pageData.websites.length > 0) {
+                // Update progress
+                setSyncProgress({ current: Math.min(page * pageSize, totalCount), total: totalCount, isComplete: false })
+
+                // Update websites immediately
+                if (isAutoRefresh) {
+                  setWebsites(prev => {
+                    const merged = mergeWebsites(prev, pageData.websites)
+                    return sortWebsites(merged, sortField, sortDirection)
+                  })
+                } else {
+                  setWebsites(prev => sortWebsites([...prev, ...pageData.websites], sortField, sortDirection))
+                }
+
+                // Update summary
+                if (pageData.summary) {
+                  allSummaries.push(pageData.summary)
+                  currentSummary = {
+                    totalPageviews: allSummaries.reduce((sum, s) => sum + s.totalPageviews, 0),
+                    totalSessions: allSummaries.reduce((sum, s) => sum + s.totalSessions, 0),
+                    totalVisitors: allSummaries.reduce((sum, s) => sum + s.totalVisitors, 0),
+                    avgSessionTime: Math.floor(
+                      allSummaries.reduce((sum, s) => sum + s.avgSessionTime, 0) / allSummaries.length
+                    ),
+                    totalCurrentOnline: allSummaries.reduce((sum, s) => sum + s.totalCurrentOnline, 0),
+                  }
+                  setSummary(currentSummary)
+                }
+              }
+            } catch (err) {
+              console.error(`Error fetching page ${page}:`, err)
+            }
+          }
+        }
+
+        // Sync complete - update timestamp and mark progress as complete
+        if (totalCount > 0) {
+          setSyncProgress({ current: totalCount, total: totalCount, isComplete: true })
+        }
+        setLastUpdated(new Date())
+
+        // Reset auto refresh
         if (resetAutoRefresh && refreshInterval > 0 && isConfigComplete(config)) {
           scheduleAutoRefresh()
         }
+
       } else {
-        // Handle error response
+        // Handle error
         setStatusMessage(data.message || data.error || t('dataFetchFailed'))
         setDataSource("error")
         setLoading(false)
         setInitialLoad(false)
+        setSyncProgress(null)
 
         if (showToast) {
           toast({
@@ -215,17 +310,20 @@ export default function UmamiDashboard() {
     } catch (error) {
       console.error("Failed to fetch data:", error)
       clearTimeout(loadingTimeout)
-      setLoading(false)
-      setInitialLoad(false)
-      setStatusMessage(t('networkConnectionFailed'))
-      setDataSource("error")
+      if (fetchSessionRef.current === currentSessionId) {
+        setLoading(false)
+        setInitialLoad(false)
+        setSyncProgress(null)
+        setStatusMessage(t('networkConnectionFailed'))
+        setDataSource("error")
 
-      if (showToast) {
-        toast({
-          title: t('dataUpdateFailed'),
-          description: t('unableToFetchStats'),
-          variant: "destructive",
-        })
+        if (showToast) {
+          toast({
+            title: t('dataUpdateFailed'),
+            description: t('unableToFetchStats'),
+            variant: "destructive",
+          })
+        }
       }
     }
   }
@@ -276,14 +374,20 @@ export default function UmamiDashboard() {
 
   // 自动刷新逻辑 - 只有配置完整时才启用
   useEffect(() => {
-    // 启动自动刷新
+    // Clear any existing timeout first
+    if (autoRefreshTimeoutId) {
+      clearTimeout(autoRefreshTimeoutId)
+      setAutoRefreshTimeoutId(null)
+    }
+
+    // Only schedule if interval > 0 and config is complete
     if (refreshInterval > 0 && isConfigComplete(config)) {
       scheduleAutoRefresh()
     } else if (!isConfigComplete(config) && refreshInterval > 0) {
       console.log(t('autoRefreshDisabled'))
     }
 
-    // 清理函数
+    // Cleanup function
     return () => {
       if (autoRefreshTimeoutId) {
         clearTimeout(autoRefreshTimeoutId)
@@ -329,7 +433,7 @@ export default function UmamiDashboard() {
     if (seconds < 60) {
       return `${seconds}${t('seconds')}`
     } else if (seconds < 3600) {
-    const minutes = Math.floor(seconds / 60)
+      const minutes = Math.floor(seconds / 60)
       return `${minutes}${t('minute')}${minutes > 1 ? t('minutes') : ''}`
     } else {
       const hours = Math.floor(seconds / 3600)
@@ -368,13 +472,13 @@ export default function UmamiDashboard() {
       return t('justNow')
     } else if (diffInSeconds < 3600) {
       const minutes = Math.floor(diffInSeconds / 60)
-      return t('minutesAgo', { count: minutes })
+      return `${minutes}m ago`
     } else if (diffInSeconds < 86400) {
       const hours = Math.floor(diffInSeconds / 3600)
-      return t('hoursAgo', { count: hours })
+      return `${hours}h ago`
     } else {
       const days = Math.floor(diffInSeconds / 86400)
-      return t('daysAgo', { count: days })
+      return `${days}d ago`
     }
   }
 
@@ -461,7 +565,7 @@ export default function UmamiDashboard() {
     if (config?.serverUrl) {
       try {
         // 如果配置了服务器别名，优先使用别名
-        const baseUrl = config.serverAlias && config.serverAlias.trim() 
+        const baseUrl = config.serverAlias && config.serverAlias.trim()
           ? config.serverAlias.replace(/\/+$/, '') // 去除末尾斜杠
           : config.serverUrl.replace(/\/+$/, '') // 去除末尾斜杠
         return `${baseUrl}/websites/${websiteId}`
@@ -550,6 +654,29 @@ export default function UmamiDashboard() {
                 </Badge>
               </div>
             </div>
+
+            {/* Progress Bar */}
+            {syncProgress && (
+              <div className="w-full space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className={syncProgress.isComplete ? "text-green-600 font-medium" : "text-blue-600 font-medium"}>
+                    {syncProgress.isComplete ? '✓ Synced' : 'Syncing...'} {syncProgress.current}/{syncProgress.total} sites
+                  </span>
+                  <span className="text-muted-foreground">
+                    {Math.round((syncProgress.current / syncProgress.total) * 100)}%
+                  </span>
+                </div>
+                <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
+                  <div
+                    className={`h-full transition-all duration-300 ${syncProgress.isComplete
+                        ? 'bg-green-500'
+                        : 'bg-blue-500 animate-pulse'
+                      }`}
+                    style={{ width: `${(syncProgress.current / syncProgress.total) * 100}%` }}
+                  />
+                </div>
+              </div>
+            )}
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4 text-sm text-muted-foreground">
               <span className="text-xs sm:text-sm">{getTimeRangeDescription(timeRange)} {t('dataSummary')}</span>
               <div className="flex items-center gap-1">
@@ -760,13 +887,13 @@ export default function UmamiDashboard() {
                   </span>
                 </div>
               </div>
-              
+
               {/* 右侧：版权信息与链接 */}
               <div className="flex items-center gap-3 text-xs text-muted-foreground">
                 <span>© {getCopyrightYears()} • All rights reserved</span>
-                <a 
-                  href="https://github.com/songtianlun/umami-dashboard" 
-                  target="_blank" 
+                <a
+                  href="https://github.com/songtianlun/umami-dashboard"
+                  target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center gap-1 hover:text-foreground transition-colors"
                 >
