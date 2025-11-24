@@ -165,49 +165,83 @@ export class UmamiAPI {
             console.log("Start getting all websites...")
 
             const allWebsites: UmamiWebsite[] = []
-            const pageSize = 100 // 每次获取100个
-            let page = 1
-            let hasMore = true
+            const pageSize = 100
 
-            while (hasMore) {
-                try {
-                    console.log(`Fetching page ${page} (pageSize: ${pageSize})...`)
-                    // Use page and pageSize as per Umami API docs
-                    const data = await this.makeRequest(`/api/websites?page=${page}&pageSize=${pageSize}`)
+            // 1. Fetch first page to get total count
+            console.log(`Fetching page 1 (pageSize: ${pageSize})...`)
+            const firstPageData = await this.makeRequest(`/api/websites?page=1&pageSize=${pageSize}`)
 
-                    let websites: UmamiWebsite[] = []
+            let firstPageWebsites: UmamiWebsite[] = []
+            let totalCount = 0
 
-                    // 处理不同的响应格式
-                    if (data.data && Array.isArray(data.data)) {
-                        websites = data.data
-                    } else if (Array.isArray(data)) {
-                        websites = data
-                    } else {
-                        console.log("Unknown response format:", typeof data)
-                    }
+            if (firstPageData.data && Array.isArray(firstPageData.data)) {
+                firstPageWebsites = firstPageData.data
+                totalCount = firstPageData.count || 0
+            } else if (Array.isArray(firstPageData)) {
+                firstPageWebsites = firstPageData
+                // If API doesn't return count, we can't do parallel fetching easily without knowing total
+                // But usually array response means no pagination or all data
+            }
 
-                    if (websites.length > 0) {
-                        allWebsites.push(...websites)
-                        console.log(`Got ${websites.length} websites`)
+            if (firstPageWebsites.length > 0) {
+                allWebsites.push(...firstPageWebsites)
+                console.log(`Got page 1: ${firstPageWebsites.length} websites`)
+            }
 
-                        if (websites.length < pageSize) {
-                            hasMore = false // 返回数量少于pageSize，说明没有更多了
-                        } else {
-                            page++
+            // 2. Calculate remaining pages and fetch in parallel
+            if (totalCount > pageSize) {
+                const totalPages = Math.ceil(totalCount / pageSize)
+                console.log(`Total websites: ${totalCount}, Total pages: ${totalPages}`)
+
+                const pagePromises = []
+                // Start from page 2
+                for (let page = 2; page <= totalPages; page++) {
+                    // Limit to 50 pages for safety
+                    if (page > 50) break
+
+                    pagePromises.push(
+                        this.makeRequest(`/api/websites?page=${page}&pageSize=${pageSize}`)
+                            .then(data => {
+                                if (data.data && Array.isArray(data.data)) {
+                                    return data.data
+                                }
+                                return []
+                            })
+                            .catch(err => {
+                                console.error(`Error fetching page ${page}:`, err)
+                                return []
+                            })
+                    )
+                }
+
+                if (pagePromises.length > 0) {
+                    console.log(`Fetching ${pagePromises.length} remaining pages in parallel...`)
+                    const results = await Promise.all(pagePromises)
+                    results.forEach(websites => {
+                        if (websites.length > 0) {
+                            allWebsites.push(...websites)
                         }
-                    } else {
+                    })
+                }
+            } else if (firstPageWebsites.length === pageSize) {
+                // Fallback for APIs that don't return count but might have more pages (rare with Umami)
+                // Use sequential fetching as backup
+                let page = 2
+                let hasMore = true
+                while (hasMore && page <= 50) {
+                    try {
+                        const data = await this.makeRequest(`/api/websites?page=${page}&pageSize=${pageSize}`)
+                        const sites = data.data || (Array.isArray(data) ? data : [])
+                        if (sites.length > 0) {
+                            allWebsites.push(...sites)
+                            page++
+                            if (sites.length < pageSize) hasMore = false
+                        } else {
+                            hasMore = false
+                        }
+                    } catch (e) {
                         hasMore = false
                     }
-
-                    // 安全限制：防止无限循环
-                    if (page > 50) {
-                        console.warn("Reached page limit (50), stopping pagination")
-                        hasMore = false
-                    }
-
-                } catch (error) {
-                    console.error(`Error fetching page ${page}:`, error)
-                    hasMore = false
                 }
             }
 
