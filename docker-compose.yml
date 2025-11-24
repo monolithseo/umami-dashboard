@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  umami-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: umami-dashboard
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      # Optional: Pre-configure Umami connection
+      # You can set these in Coolify's environment variables section
+      - UMAMI_SERVER_URL=${UMAMI_SERVER_URL}
+      - UMAMI_USERNAME=${UMAMI_USERNAME}
+      - UMAMI_PASSWORD=${UMAMI_PASSWORD}
+      - UMAMI_SERVER_ALIAS=${UMAMI_SERVER_ALIAS}

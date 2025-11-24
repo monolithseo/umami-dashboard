@@ -159,76 +159,66 @@ export class UmamiAPI {
         }
     }
 
-    // 获取所有网站数据 - 根据Umami API文档优化
+    // 获取所有网站数据 - 修复分页限制问题
     async getAllWebsites(): Promise<UmamiWebsite[]> {
         try {
             console.log("Start getting all websites...")
-            
-            // 根据Umami官方API文档，先尝试基础调用
-            const data = await this.makeRequest("/api/websites")
-            // console.log("Raw API response:", JSON.stringify(data, null, 2))
-            
-            // 处理不同的响应格式
-            let websites: UmamiWebsite[] = []
-            
-            if (data.data && Array.isArray(data.data)) {
-                websites = data.data
-                console.log("Using data.data format, website count:", websites.length)
-            } else if (Array.isArray(data)) {
-                websites = data
-                console.log("Using direct array format, website count:", websites.length)
-            } else {
-                console.log("Unknown response format:", typeof data, data)
-                websites = []
-            }
 
-            const possiblePageSizes = [10, 20, 50, 100]
-            const needsPagination = possiblePageSizes.includes(websites.length) && websites.length > 0
-            if (needsPagination) {
-                console.log(`Detected pagination (current return ${websites.length} websites), try to get more data...`)
+            const allWebsites: UmamiWebsite[] = []
+            const limit = 100 // 每次获取100个
+            let offset = 0
+            let hasMore = true
+            let page = 1
 
-                const allWebsites: UmamiWebsite[] = [...websites]
-                let currentPage = 1
-                const pageSize = websites.length
+            while (hasMore) {
+                try {
+                    console.log(`Fetching page ${page} (offset: ${offset}, limit: ${limit})...`)
+                    const data = await this.makeRequest(`/api/websites?limit=${limit}&offset=${offset}`)
 
-                while (currentPage < 10) {
-                    currentPage++
-                    try {
-                        const pageData = await this.makeRequest(`/api/websites?page=${currentPage}&size=${pageSize}`)
-                        const pageWebsites = pageData.data || pageData || []
-                        console.log(`Get Page ${currentPage}, Return ${pageWebsites.length} websites`)
-                        if (pageWebsites.length === 0) {
-                            console.log("No more data")
-                            break
-                        }
+                    let websites: UmamiWebsite[] = []
 
-                        allWebsites.push(...pageWebsites)
-
-                        if (pageWebsites.length < pageSize) {
-                            console.log("no more data")
-                            break
-                        }
-
-                        // 等待200ms，避免请求过于频繁
-                        await new Promise(resolve => setTimeout(resolve, 200))
-
-                    } catch (error) {
-                        console.error("Error getting pagination data:", error)
-                        break
+                    // 处理不同的响应格式
+                    if (data.data && Array.isArray(data.data)) {
+                        websites = data.data
+                    } else if (Array.isArray(data)) {
+                        websites = data
+                    } else {
+                        console.log("Unknown response format:", typeof data)
                     }
-                }
 
-                websites = allWebsites
+                    if (websites.length > 0) {
+                        allWebsites.push(...websites)
+                        console.log(`Got ${websites.length} websites`)
+
+                        if (websites.length < limit) {
+                            hasMore = false // 返回数量少于limit，说明没有更多了
+                        } else {
+                            offset += limit
+                            page++
+                        }
+                    } else {
+                        hasMore = false
+                    }
+
+                    // 安全限制：防止无限循环 (比如API不支持分页导致一直返回相同数据)
+                    if (page > 50) { // 50 * 100 = 5000 sites limit
+                        console.warn("Reached page limit (50), stopping pagination")
+                        hasMore = false
+                    }
+
+                } catch (error) {
+                    console.error(`Error fetching page ${page}:`, error)
+                    hasMore = false
+                }
             }
-            
-            console.log(`✅ Total ${websites.length} websites`)
-            return websites
-            
+
+            console.log(`✅ Total ${allWebsites.length} websites fetched`)
+            return allWebsites
+
         } catch (error) {
             console.error("❌ Error getting all websites:", error)
             if (error instanceof Error) {
                 console.error("Error details:", error.message)
-                console.error("Error stack:", error.stack)
             }
             return []
         }
