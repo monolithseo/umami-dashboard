@@ -652,31 +652,28 @@ export default function UmamiDashboard() {
                 <Badge variant={getDataSourceBadge().variant} className="text-xs">
                   {getDataSourceBadge().text}
                 </Badge>
+                {syncProgress && (
+                  <div className="relative overflow-hidden rounded-full border border-blue-500 dark:border-blue-400">
+                    {/* Background progress bar */}
+                    <div
+                      className={`absolute inset-0 transition-all duration-300 ${syncProgress.isComplete
+                          ? 'bg-green-500/20 dark:bg-green-500/30'
+                          : 'bg-blue-500/20 dark:bg-blue-500/30'
+                        }`}
+                      style={{ width: `${(syncProgress.current / syncProgress.total) * 100}%` }}
+                    />
+                    {/* Text content */}
+                    <div className={`relative px-3 py-1 text-xs font-medium whitespace-nowrap ${syncProgress.isComplete
+                        ? 'text-green-600 dark:text-green-400'
+                        : 'text-blue-600 dark:text-blue-400'
+                      }`}>
+                      {syncProgress.isComplete ? '✓ ' : ''}
+                      {syncProgress.current}/{syncProgress.total} sites
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
-
-            {/* Progress Bar */}
-            {syncProgress && (
-              <div className="w-full space-y-2">
-                <div className="flex items-center justify-between text-xs">
-                  <span className={syncProgress.isComplete ? "text-green-600 font-medium" : "text-blue-600 font-medium"}>
-                    {syncProgress.isComplete ? '✓ Synced' : 'Syncing...'} {syncProgress.current}/{syncProgress.total} sites
-                  </span>
-                  <span className="text-muted-foreground">
-                    {Math.round((syncProgress.current / syncProgress.total) * 100)}%
-                  </span>
-                </div>
-                <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
-                  <div
-                    className={`h-full transition-all duration-300 ${syncProgress.isComplete
-                        ? 'bg-green-500'
-                        : 'bg-blue-500 animate-pulse'
-                      }`}
-                    style={{ width: `${(syncProgress.current / syncProgress.total) * 100}%` }}
-                  />
-                </div>
-              </div>
-            )}
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4 text-sm text-muted-foreground">
               <span className="text-xs sm:text-sm">{getTimeRangeDescription(timeRange)} {t('dataSummary')}</span>
               <div className="flex items-center gap-1">
