@@ -165,15 +165,15 @@ export class UmamiAPI {
             console.log("Start getting all websites...")
 
             const allWebsites: UmamiWebsite[] = []
-            const limit = 100 // 每次获取100个
-            let offset = 0
-            let hasMore = true
+            const pageSize = 100 // 每次获取100个
             let page = 1
+            let hasMore = true
 
             while (hasMore) {
                 try {
-                    console.log(`Fetching page ${page} (offset: ${offset}, limit: ${limit})...`)
-                    const data = await this.makeRequest(`/api/websites?limit=${limit}&offset=${offset}`)
+                    console.log(`Fetching page ${page} (pageSize: ${pageSize})...`)
+                    // Use page and pageSize as per Umami API docs
+                    const data = await this.makeRequest(`/api/websites?page=${page}&pageSize=${pageSize}`)
 
                     let websites: UmamiWebsite[] = []
 
@@ -190,18 +190,17 @@ export class UmamiAPI {
                         allWebsites.push(...websites)
                         console.log(`Got ${websites.length} websites`)
 
-                        if (websites.length < limit) {
-                            hasMore = false // 返回数量少于limit，说明没有更多了
+                        if (websites.length < pageSize) {
+                            hasMore = false // 返回数量少于pageSize，说明没有更多了
                         } else {
-                            offset += limit
                             page++
                         }
                     } else {
                         hasMore = false
                     }
 
-                    // 安全限制：防止无限循环 (比如API不支持分页导致一直返回相同数据)
-                    if (page > 50) { // 50 * 100 = 5000 sites limit
+                    // 安全限制：防止无限循环
+                    if (page > 50) {
                         console.warn("Reached page limit (50), stopping pagination")
                         hasMore = false
                     }
