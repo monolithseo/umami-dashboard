@@ -8,7 +8,7 @@ services:
     # If you remove this, it will pull the upstream image without the fix.
     build: .
     ports:
-      - "3000:3000"
+      - "3001:3000"
     environment:
       - UMAMI_SERVER_URL=${UMAMI_SERVER_URL}
       - UMAMI_USERNAME=${UMAMI_USERNAME}
